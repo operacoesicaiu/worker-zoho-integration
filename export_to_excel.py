@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 
 def get_env_config():
+    """Carrega absolutamente tudo dos Secrets do GitHub"""
     try:
         mapping_str = os.getenv('COLUMN_MAPPING', '{}')
         return {
@@ -16,11 +17,12 @@ def get_env_config():
             "app_link_name": os.getenv('ZOHO_APP_LINK_NAME'),
             "report_link_name": os.getenv('ZOHO_REPORT_LINK_NAME'),
             "spreadsheet_id": os.getenv('SPREADSHEET_ID'),
+            "sheet_name": os.getenv('SHEET_NAME'),
             "google_token": os.getenv('GOOGLE_TOKEN'),
             "mapping": json.loads(mapping_str)
         }
     except Exception as e:
-        sys.exit(f"Erro configuracao: {e}")
+        sys.exit(f"Erro ao carregar configuracoes dos Secrets: {e}")
 
 def extract_value(value):
     if value is None or value == '': return ''
@@ -30,23 +32,24 @@ def extract_value(value):
     return str(value)
 
 def send_to_sheets(rows, config):
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{config['spreadsheet_id']}/values/ERP_iCaiu!A1:append"
+    """Usa o SHEET_NAME vindo dos secrets para endereçamento"""
+    aba = config['sheet_name']
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{config['spreadsheet_id']}/values/{aba}!A1:append"
     headers = {"Authorization": f"Bearer {config['google_token']}", "Content-Type": "application/json"}
     
     for i in range(0, len(rows), 500):
         batch = rows[i:i+500]
         res = requests.post(f"{url}?valueInputOption=USER_ENTERED", headers=headers, json={"values": batch})
         if res.status_code != 200:
-            print(f"Erro Sheets: {res.text}")
+            print(f"Erro Sheets ({aba}): {res.text}")
         else:
-            print(f"Enviado lote de {len(batch)} linhas.")
-        time.sleep(2) # Pausa para evitar bloqueio do Google
+            print(f"Enviado lote de {len(batch)} linhas para a aba {aba}.")
+        time.sleep(2)
 
 def run():
     conf = get_env_config()
-    if not conf['google_token']: sys.exit("Token Google ausente")
-
-    # 1. Token Zoho
+    
+    # 1. Autenticação Zoho
     auth_res = requests.post("https://accounts.zoho.com/oauth/v2/token", params={
         'refresh_token': conf['refresh_token'],
         'client_id': conf['client_id'],
@@ -55,16 +58,17 @@ def run():
     }).json()
     zoho_token = auth_res.get('access_token')
 
+    # 2. Paginação para milhares de linhas
     all_processed = []
     from_index = 0
-    limit = 200 # Limite por chamada do Zoho
+    limit = 200
     
-    print("Iniciando captura de dados (paginada)...")
+    print(f"Iniciando captura para a planilha: {conf['spreadsheet_id']}")
     
     while True:
         query_url = f"https://creator.zoho.com/api/v2/{conf['account_owner']}/{conf['app_link_name']}/report/{conf['report_link_name']}"
         headers = {'Authorization': f"Zoho-oauthtoken {zoho_token}"}
-        # Pegamos tudo antes de 19/Mar/2026 como voce pediu na carga inicial
+        
         params = {
             'criteria': "Data_e_hora_de_inicio_do_formul_rio < '19-Mar-2026'",
             'from': from_index,
@@ -72,28 +76,23 @@ def run():
         }
         
         resp = requests.get(query_url, headers=headers, params=params)
-        if resp.status_code != 200:
-            print(f"Erro Zoho: {resp.text}")
-            break
+        if resp.status_code != 200: break
             
         data = resp.json().get('data', [])
-        if not data:
-            break # Fim dos dados
+        if not data: break
             
         for record in data:
+            # Segue a ordem exata definida no COLUMN_MAPPING do Secret
             row = [extract_value(record.get(zoho_key, '')) for zoho_key in conf['mapping'].values()]
             all_processed.append(row)
             
-        print(f"Capturados {len(all_processed)} registros...")
         from_index += limit
-        time.sleep(0.5) # Evita sobrecarga no Zoho
 
-    # 3. Enviar para o Sheets
+    # 3. Envio final
     if all_processed:
-        print(f"Iniciando envio de {len(all_processed)} linhas para o Google Sheets...")
         send_to_sheets(all_processed, conf)
     else:
-        print("Nenhum dado encontrado para os criterios.")
+        print("Nenhum dado encontrado.")
 
 if __name__ == "__main__":
     run()
