@@ -31,16 +31,26 @@ def send_to_sheets(records, config):
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{config['spreadsheet_id']}/values/ERP_iCaiu!A1:append"
     headers = {"Authorization": f"Bearer {config['google_token']}", "Content-Type": "application/json"}
     
-    # Converte JSON em Matriz
-    rows = [list(r.values()) for r in records]
+    rows = []
+    for r in records:
+        clean_row = []
+        for value in r.values():
+            # Se o valor for um dicionário (objeto do Zoho), pega só o texto principal
+            if isinstance(value, dict):
+                clean_row.append(str(value.get('display_value', value.get('ID', value))))
+            else:
+                clean_row.append(str(value) if value is not None else "")
+        rows.append(clean_row)
 
-    # Envio em lotes de 500 (Limite Google)
+    # Envio em lotes de 500
     for i in range(0, len(rows), 500):
         batch = rows[i:i+500]
         res = requests.post(f"{url}?valueInputOption=USER_ENTERED", 
                             headers=headers, json={"values": batch})
         if res.status_code != 200:
             print(f"Erro Sheets: {res.text}")
+        else:
+            print(f"Lote enviado com sucesso!")
         time.sleep(1.5)
 
 def run():
