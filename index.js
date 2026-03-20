@@ -31,9 +31,8 @@ async function run() {
         SPREADSHEET_ID, SHEET_NAME, GOOGLE_TOKEN, COLUMN_MAPPING
     } = process.env;
 
-    // Verificação de integridade dos Secrets
     if (!ZOHO_CLIENT_ID || !GOOGLE_TOKEN || !COLUMN_MAPPING) {
-        console.error("Erro: Variáveis de ambiente obrigatorias ausentes.");
+        console.error("Erro: Variáveis de ambiente obrigatórias ausentes.");
         process.exit(1);
     }
 
@@ -53,36 +52,38 @@ async function run() {
             timeout: 20000
         });
         const zohoToken = authRes.data.access_token;
-        console.log("Autenticação realizada.");
+        console.log("Autenticação realizada com sucesso.");
 
-        // 2. Lógica de Carga Total (Gatilho: 20/03/2026)
-        const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-        const isFullLoadDay = (hoje === "20/03/2026");
+        // 2. Cálculo do "Dia de Ontem"
+        // O Zoho espera o formato DD-Mon-YYYY (Ex: 19-Mar-2026)
+        const mesesIngles = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const dataReferencia = new Date();
+        dataReferencia.setDate(dataReferencia.getDate() - 1); // Remove 1 dia
 
-        if (isFullLoadDay) {
-            console.log("AVISO: Data 20/03/2026 detectada. Iniciando CARGA TOTAL da base.");
-        } else {
-            console.log(`Modo Incremental ativo. Data atual: ${hoje}.`);
-        }
+        const dia = String(dataReferencia.getDate()).padStart(2, '0');
+        const mes = mesesIngles[dataReferencia.getMonth()];
+        const ano = dataReferencia.getFullYear();
+        
+        const dataFiltro = `${dia}-${mes}-${ano}`;
+        console.log(`--- ETAPA 2: Filtrando registros de ontem (${dataFiltro}) ---`);
 
         let allProcessed = [];
-        let fromIndex = 0;
+        let fromIndex = 1; // API do Zoho Creator v2 inicia em 1
         const limit = 200;
 
-        // 3. Loop de Captura de Dados
+        // 3. Loop de Captura de Dados com Critério de Data
         while (true) {
             const queryUrl = `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_APP_LINK_NAME}/report/${ZOHO_REPORT_LINK_NAME}`;
-            const params = { from: fromIndex, limit: limit };
+            
+            // Critério: Pega registros onde a data de início é IGUAL ao dia de ontem
+            // Usamos >= 00:00:00 e <= 23:59:59 para garantir o dia cheio
+            const criteria = `(Data_e_hora_de_inicio_do_formul_rio >= "${dataFiltro} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${dataFiltro} 23:59:59")`;
 
-            if (!isFullLoadDay) {
-                params.criteria = "Data_e_hora_de_inicio_do_formul_rio < '19-Mar-2026'";
-            }
-
-            console.log(`Buscando registros: indice ${fromIndex}...`);
+            console.log(`Buscando registros: índice ${fromIndex}...`);
             
             try {
                 const resp = await axios.get(queryUrl, {
-                    params,
+                    params: { from: fromIndex, limit: limit, criteria: criteria },
                     headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` },
                     timeout: 45000
                 });
@@ -91,56 +92,45 @@ async function run() {
                 if (data.length === 0) break;
 
                 data.forEach(record => {
+                    // Mapeia os campos conforme o JSON configurado no COLUMN_MAPPING
                     const row = Object.values(mapping).map(zohoKey => extractValue(record[zohoKey]));
                     allProcessed.push(row);
                 });
 
+                if (data.length < limit) break; // Se veio menos que o limite, acabou a base
                 fromIndex += limit;
 
             } catch (err) {
-                // Se o Zoho retornar 404 (code 3100), significa que a base acabou. 
-                // Encerramos o loop normalmente em vez de quebrar o script.
-                if (err.response && err.response.status === 404) {
-                    console.log("Fim dos registros alcancado (Resposta 404 da API).");
+                if (err.response && (err.response.status === 404 || err.response.data.code === 3100)) {
+                    console.log("Fim dos registros alcançado.");
                     break;
                 }
-                // Se for qualquer outro erro, relanca para o catch principal
                 throw err;
             }
-
-            const maxRows = isFullLoadDay ? 300000 : 50000;
-            if (fromIndex > maxRows) {
-                console.log("Limite de seguranca do loop atingido.");
-                break;
-            }
         }
+
         // 4. Envio para Google Sheets
         if (allProcessed.length > 0) {
-            console.log(`Iniciando envio de ${allProcessed.length} linhas para a aba ${SHEET_NAME}.`);
+            console.log(`--- ETAPA 3: Enviando ${allProcessed.length} linhas para o Sheets ---`);
             const urlAppend = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!A1:append?valueInputOption=USER_ENTERED`;
 
             for (let i = 0; i < allProcessed.length; i += 500) {
                 const batch = allProcessed.slice(i, i + 500);
                 await axios.post(urlAppend, { values: batch }, { headers: gHeaders, timeout: 60000 });
                 console.log(`Lote enviado: ${i + batch.length} de ${allProcessed.length}`);
-                await sleep(1500);
+                await sleep(1500); // Evita Rate Limit do Google
             }
-            console.log("Processo concluido com sucesso.");
+            console.log("Processo concluído com sucesso!");
         } else {
-            console.log("Nenhum dado retornado pela API para processamento.");
+            console.log("Nenhum dado encontrado para o dia de ontem.");
         }
 
     } catch (e) {
         console.error("\n--- FALHA NO PROCESSO ---");
         if (e.response) {
-            console.error(`Status: ${e.response.status}`);
-            console.error(`Servico: ${e.config.url.includes('zoho') ? 'ZOHO' : 'GOOGLE'}`);
-            console.error(`Resposta da API: ${JSON.stringify(e.response.data)}`);
-        } else if (e.request) {
-            console.error("Erro de Rede ou Timeout. O servidor nao respondeu a tempo.");
-            console.error(`URL Alvo: ${e.config.url}`);
+            console.error(`Status: ${e.response.status} | Resposta: ${JSON.stringify(e.response.data)}`);
         } else {
-            console.error(`Erro de Execucao: ${e.message}`);
+            console.error(`Erro: ${e.message}`);
         }
         process.exit(1);
     }
