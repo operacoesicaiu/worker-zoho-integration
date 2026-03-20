@@ -79,28 +79,41 @@ async function run() {
             }
 
             console.log(`Buscando registros: indice ${fromIndex}...`);
-            const resp = await axios.get(queryUrl, {
-                params,
-                headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` },
-                timeout: 45000
-            });
+            
+            try {
+                const resp = await axios.get(queryUrl, {
+                    params,
+                    headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` },
+                    timeout: 45000
+                });
 
-            const data = resp.data.data || [];
-            if (data.length === 0) break;
+                const data = resp.data.data || [];
+                if (data.length === 0) break;
 
-            data.forEach(record => {
-                const row = Object.values(mapping).map(zohoKey => extractValue(record[zohoKey]));
-                allProcessed.push(row);
-            });
+                data.forEach(record => {
+                    const row = Object.values(mapping).map(zohoKey => extractValue(record[zohoKey]));
+                    allProcessed.push(row);
+                });
 
-            fromIndex += limit;
-            const maxRows = isFullLoadDay ? 200000 : 50000;
+                fromIndex += limit;
+
+            } catch (err) {
+                // Se o Zoho retornar 404 (code 3100), significa que a base acabou. 
+                // Encerramos o loop normalmente em vez de quebrar o script.
+                if (err.response && err.response.status === 404) {
+                    console.log("Fim dos registros alcancado (Resposta 404 da API).");
+                    break;
+                }
+                // Se for qualquer outro erro, relanca para o catch principal
+                throw err;
+            }
+
+            const maxRows = isFullLoadDay ? 300000 : 50000;
             if (fromIndex > maxRows) {
                 console.log("Limite de seguranca do loop atingido.");
                 break;
             }
         }
-
         // 4. Envio para Google Sheets
         if (allProcessed.length > 0) {
             console.log(`Iniciando envio de ${allProcessed.length} linhas para a aba ${SHEET_NAME}.`);
