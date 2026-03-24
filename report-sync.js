@@ -9,9 +9,7 @@ function maskSensitiveData(data, maxLength = 8) {
 
 // Função para registrar eventos sem expor dados sensíveis
 function secureLog(message, isError = false) {
-    const timestamp = new Date().toISOString();
-    const logLevel = isError ? 'ERROR' : 'INFO';
-    console.log(`[${timestamp}] [${logLevel}] ${message}`);
+    // Removido logging para evitar mensagens públicas no GitHub Actions
 }
 
 // Função para impedir Spreadsheet Formula Injection
@@ -46,7 +44,6 @@ function processField(record, fieldName) {
 async function run() {
     try {
         // Autenticação Zoho
-        secureLog("Iniciando autenticação Zoho");
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
             params: {
                 refresh_token: process.env.ZOHO_REFRESH_TOKEN,
@@ -56,7 +53,6 @@ async function run() {
             }
         });
         const zohoToken = authRes.data.access_token;
-        secureLog("Autenticação Zoho realizada com sucesso");
 
         // Configurações
         const owner = process.env.ZOHO_ACCOUNT_OWNER;
@@ -80,8 +76,6 @@ async function run() {
 
         const startDateStr = formatDate(startOfMonthTwoMonthsAgo);
         const endDateStr = formatDate(today);
-        
-        secureLog(`Filtrando registros de ${startDateStr} a ${endDateStr}`);
 
         // Critério de filtro por data
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${startDateStr}' && Data_e_hora_de_inicio_do_formulario <= '${endDateStr}')`;
@@ -90,12 +84,9 @@ async function run() {
         let page = 1;
         const limit = 200;
 
-        secureLog(`Iniciando busca paginada no Zoho: ${app}`);
-
-        // LOOP DE PAGINAÇÃO
-        while (true) {
+        // LOOP DE PAGINAÇÃO com limite de 50 páginas
+        while (page <= 50) {
             const fromIndex = (page - 1) * limit + 1;
-            secureLog(`Buscando página ${page} (registros a partir de ${fromIndex})`);
 
             const resp = await axios.get(baseUrl, {
                 params: { 
@@ -113,7 +104,6 @@ async function run() {
             if (records.length === 0) break;
 
             allRecords = allRecords.concat(records);
-            secureLog(`Encontrados ${records.length} registros nesta página`);
 
             if (records.length < limit) break; // Se veio menos que 200, é a última página
             page++;
@@ -122,8 +112,6 @@ async function run() {
         // Processar e Enviar para Google Sheets
         if (allRecords.length > 0) {
             const allProcessed = allRecords.map(rec => columns.map(f => processField(rec, f)));
-            
-            secureLog(`Total consolidado: ${allProcessed.length} registros. Enviando ao Sheets...`);
             
             const sheetId = process.env.REPORT_SPREADSHEET_ID;
             const sheetName = process.env.REPORT_SHEET_NAME;
@@ -136,13 +124,9 @@ async function run() {
                 { values: allProcessed },
                 { headers: { 'Authorization': `Bearer ${process.env.GOOGLE_TOKEN}` } }
             );
-            secureLog("Sincronização concluída com sucesso");
-        } else {
-            secureLog("Nenhum registro encontrado no Zoho");
         }
 
     } catch (e) {
-        secureLog("Erro crítico no processo de sincronização", true);
         process.exit(1);
     }
 }
