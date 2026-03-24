@@ -20,7 +20,7 @@ jobs:
       - name: Execute Sync
         run: |
           printf "::add-mask::%s\n" "$GOOGLE_TOKEN"
-          node sync-icaiu.js
+          node report-sync.js
         env:
           GOOGLE_TOKEN: ${{ github.event.client_payload.token }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
