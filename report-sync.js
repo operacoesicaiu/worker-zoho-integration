@@ -8,10 +8,21 @@ function sanitize(val) {
 }
 
 function processField(record, fieldName) {
-    const rawValue = record[fieldName];
+    let rawValue = record[fieldName];
     if (rawValue === null || rawValue === undefined || rawValue === '') return '';
-    if (typeof rawValue === 'object' && !Array.isArray(rawValue)) return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
-    if (Array.isArray(rawValue)) return sanitize(rawValue.map(v => (typeof v === 'object' ? v.display_value || v : v)).join(', '));
+
+    if (fieldName.includes('Telefone_de_contato') && typeof rawValue === 'string') {
+        if (rawValue.startsWith('+')) return rawValue.substring(1);
+    }
+
+    if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
+    }
+
+    if (Array.isArray(rawValue)) {
+        return sanitize(rawValue.map(v => (typeof v === 'object' ? v.display_value || v : v)).join(', '));
+    }
+
     return sanitize(String(rawValue));
 }
 
@@ -28,36 +39,52 @@ async function run() {
         });
         const zohoToken = authRes.data.access_token;
 
-        // 2. Configurações Zoho (v2.1)
+        // 2. Configurações
         const owner = process.env.ZOHO_ACCOUNT_OWNER;
         const app = process.env.ZOHO_APP_NAME;
         const report = process.env.ZOHO_REPORT_NAME;
-        
         const baseUrl = `https://creator.zoho.com/api/v2.1/${owner}/${app}/report/${report}`;
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
 
-        async function fetchRecords() {
+        let allRecords = [];
+        let page = 1;
+        const limit = 200;
+
+        console.log(`Iniciando busca paginada no Zoho: ${app}`);
+
+        // LOOP DE PAGINAÇÃO
+        while (true) {
+            const fromIndex = (page - 1) * limit + 1;
+            console.log(`Buscando página ${page} (registros a partir de ${fromIndex})...`);
+
             const resp = await axios.get(baseUrl, {
-                params: { from: 1, limit: 200 },
+                params: { from: fromIndex, limit: limit },
                 headers: { 
                     'Authorization': `Zoho-oauthtoken ${zohoToken}`,
                     'Accept': 'application/json'
                 }
             });
-            return resp.data.data || [];
+
+            const records = resp.data.data || [];
+            if (records.length === 0) break;
+
+            allRecords = allRecords.concat(records);
+            console.log(`  Encontrados ${records.length} registros nesta página.`);
+
+            if (records.length < limit) break; // Se veio menos que 200, é a última página
+            page++;
         }
 
-        console.log(`Buscando dados no Zoho: ${app}`);
-        const data = await fetchRecords();
-
         // 3. Processar e Enviar para Google Sheets
-        if (data.length > 0) {
-            const allProcessed = data.map(rec => columns.map(f => processField(rec, f)));
-            console.log(`Enviando ${allProcessed.length} registros.`);
+        if (allRecords.length > 0) {
+            const allProcessed = allRecords.map(rec => columns.map(f => processField(rec, f)));
+            
+            console.log(`Total consolidado: ${allProcessed.length} registros. Enviando ao Sheets...`);
             
             const sheetId = process.env.REPORT_SPREADSHEET_ID;
             const sheetName = process.env.REPORT_SHEET_NAME;
             
+            // Usamos PUT com o range !A2 para sobrescrever os dados antigos
             const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetName}!A2?valueInputOption=USER_ENTERED`;
 
             await axios.put(
@@ -67,7 +94,7 @@ async function run() {
             );
             console.log("Sincronizacao concluida com sucesso.");
         } else {
-            console.log("Nenhum registro encontrado.");
+            console.log("Nenhum registro encontrado no Zoho.");
         }
 
     } catch (e) {
