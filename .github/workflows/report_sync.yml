@@ -22,7 +22,7 @@ jobs:
 
       - name: Execute Report Sync Logic
         run: |
-          echo "::add-mask::$GOOGLE_TOKEN"
+          node -e "console.log('::add-mask::' + process.env.GOOGLE_TOKEN)"
           node report-sync.js
         env:
           GOOGLE_TOKEN: ${{ github.event.client_payload.token }}
