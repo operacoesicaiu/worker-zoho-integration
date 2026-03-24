@@ -28,18 +28,17 @@ async function run() {
         });
         const zohoToken = authRes.data.access_token;
 
-        // 2. Filtro de Datas
-        const hoje = new Date();
-        const inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1);
-        const f = (d) => d.toISOString().split('T')[0];
-        const criteria = `(Data_e_hora_de_inicio_do_formulario >= "${f(inicio)}")`;
+        // 2. Configurações Zoho (v2.1)
+        const owner = process.env.ZOHO_ACCOUNT_OWNER;
+        const app = process.env.ZOHO_APP_NAME;
+        const report = process.env.ZOHO_REPORT_NAME;
         
+        const baseUrl = `https://creator.zoho.com/api/v2.1/${owner}/${app}/report/${report}`;
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
-        const baseUrl = `https://creator.zoho.com/api/v2.1/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_LINK_NAME}/report/${process.env.ZOHO_REPORT_LINK_NAME}`;
 
-        async function fetchRecords(queryCriteria) {
+        async function fetchRecords() {
             const resp = await axios.get(baseUrl, {
-                params: { from: 1, limit: 200, criteria: queryCriteria },
+                params: { from: 1, limit: 200 },
                 headers: { 
                     'Authorization': `Zoho-oauthtoken ${zohoToken}`,
                     'Accept': 'application/json'
@@ -48,23 +47,18 @@ async function run() {
             return resp.data.data || [];
         }
 
-        console.log("Buscando dados no Zoho...");
-        let data = [];
-        try {
-            data = await fetchRecords(criteria);
-        } catch (e) {
-            console.log("Erro no filtro. Tentando busca geral.");
-            data = await fetchRecords(""); 
-        }
+        console.log(`Buscando dados no Zoho: ${app}`);
+        const data = await fetchRecords();
 
         // 3. Processar e Enviar para Google Sheets
         if (data.length > 0) {
             const allProcessed = data.map(rec => columns.map(f => processField(rec, f)));
             console.log(`Enviando ${allProcessed.length} registros.`);
-    
+            
             const sheetId = process.env.REPORT_SPREADSHEET_ID;
-            const range = `${process.env.REPORT_SHEET_NAME}!A2`;
-            const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=USER_ENTERED`;
+            const sheetName = process.env.REPORT_SHEET_NAME;
+            
+            const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetName}!A2?valueInputOption=USER_ENTERED`;
 
             await axios.put(
                 urlSheets,
@@ -77,12 +71,8 @@ async function run() {
         }
 
     } catch (e) {
-        console.error("Erro critico na execucao:");
-        if (e.response && e.response.data) {
-            console.error(JSON.stringify(e.response.data, null, 2));
-        } else {
-            console.error(e.message);
-        }
+        console.error("Erro critico:");
+        console.error(e.response ? JSON.stringify(e.response.data, null, 2) : e.message);
         process.exit(1);
     }
 }
