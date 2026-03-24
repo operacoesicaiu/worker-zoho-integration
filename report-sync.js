@@ -18,6 +18,7 @@ function processField(record, fieldName) {
 
 async function run() {
     try {
+        // 1. Auth Zoho
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
             params: {
                 refresh_token: process.env.ZOHO_REFRESH_TOKEN,
@@ -28,52 +29,54 @@ async function run() {
         });
         const zohoToken = authRes.data.access_token;
 
-        // Datas simplificadas para YYYY-MM-DD
+        // 2. Filtro de Datas (Últimos 2 meses)
         const hoje = new Date();
         const inicio = new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1);
-        
         const f = (d) => d.toISOString().split('T')[0];
 
-        // Critério simplificado (sem horas)
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= "${f(inicio)}" && Data_e_hora_de_inicio_do_formulario <= "${f(hoje)}")`;
-        
-        console.log(`Filtro: ${criteria}`);
-
-        let allProcessed = [];
-        let fromIndex = 1;
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
+        
+        console.log(`Tentando buscar com filtro: ${f(inicio)} ate ${f(hoje)}`);
 
-        while (true) {
-            try {
-                const resp = await axios.get(`https://creator.zoho.com/api/v2/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_LINK_NAME}/report/${process.env.ZOHO_REPORT_LINK_NAME}`, {
-                    params: { from: fromIndex, limit: 200, criteria: criteria },
-                    headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` }
-                });
-                const data = resp.data.data || [];
-                if (data.length === 0) break;
-                data.forEach(rec => allProcessed.push(columns.map(f => processField(rec, f))));
-                if (data.length < 200) break;
-                fromIndex += 200;
-                await sleep(500);
-            } catch (err) {
-                if (err.response && (err.response.status === 404 || err.response.data.code === 3100)) break;
-                throw err;
-            }
+        async function fetchRecords(queryCriteria) {
+            const resp = await axios.get(`https://creator.zoho.com/api/v2/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_LINK_NAME}/report/${process.env.ZOHO_REPORT_LINK_NAME}`, {
+                params: { from: 1, limit: 200, criteria: queryCriteria },
+                headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` }
+            });
+            return resp.data.data || [];
         }
 
-        if (allProcessed.length > 0) {
-            console.log(`Enviando ${allProcessed.length} registros...`);
+        let data = [];
+        try {
+            data = await fetchRecords(criteria);
+        } catch (e) {
+            console.log("Erro no filtro de data. Tentando busca sem filtro...");
+            data = await fetchRecords(""); 
+        }
+
+        if (data.length === 0 && criteria !== "") {
+            console.log("Nenhum dado com filtro. Tentando busca geral...");
+            data = await fetchRecords("");
+        }
+
+        // 3. Processar e Enviar
+        if (data.length > 0) {
+            const allProcessed = data.map(rec => columns.map(f => processField(rec, f)));
+            console.log(`Enviando ${allProcessed.length} registros para o Google Sheets.`);
+            
             await axios.put(
                 `https://sheets.googleapis.com/v4/spreadsheets/${process.env.REPORT_SPREADSHEET_ID}/values/${process.env.REPORT_SHEET_NAME}!A2:update?valueInputOption=USER_ENTERED`,
                 { values: allProcessed },
                 { headers: { 'Authorization': `Bearer ${process.env.GOOGLE_TOKEN}` } }
             );
-            console.log("Sucesso.");
+            console.log("Concluido com sucesso.");
         } else {
-            console.log("Nenhum dado encontrado.");
+            console.log("O Zoho retornou zero registros mesmo sem filtros. Verifique os nomes das APIs.");
         }
+
     } catch (e) {
-        console.error("Erro na execucao.");
+        console.error("Erro critico na execucao:", e.message);
         process.exit(1);
     }
 }
