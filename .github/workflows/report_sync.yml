@@ -8,6 +8,9 @@ on:
 jobs:
   run-sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
     steps:
       - uses: actions/checkout@v4
       
@@ -17,6 +20,12 @@ jobs:
           
       - run: npm install axios
       
+      - name: Explicit Secret Masking
+        run: |
+          echo "::add-mask::${{ github.event.client_payload.token }}"
+          echo "::add-mask::${{ secrets.ZOHO_CLIENT_SECRET }}"
+          echo "::add-mask::${{ secrets.ZOHO_REFRESH_TOKEN }}"
+
       - name: Execute Sync
         run: |
           printf "::add-mask::%s\n" "$GOOGLE_TOKEN"

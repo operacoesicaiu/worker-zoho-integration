@@ -7,6 +7,9 @@ on:
 jobs:
   run-sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,7 +19,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Mascarar Dados Sensíveis
+      - name: Explicit Secret Masking
         run: |
           echo "::add-mask::${{ github.event.client_payload.token }}"
           echo "::add-mask::${{ secrets.ZOHO_CLIENT_SECRET }}"

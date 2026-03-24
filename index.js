@@ -16,7 +16,7 @@ function secureLog(message, isError = false) {
     console.log(`[${timestamp}] [${logLevel}] ${message}`);
 }
 
-// Impede Formula Injection no Google Sheets
+// Função para impedir Spreadsheet Formula Injection
 function sanitize(val) {
     if (typeof val !== 'string') return val;
     const formulaChars = ['=', '+', '-', '@'];
