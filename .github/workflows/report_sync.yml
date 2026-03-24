@@ -1,37 +1,34 @@
-name: Zoho ERP Report Sync (2 Meses)
+name: iCaiu Sync
 
 on:
   repository_dispatch:
-    types: [report_token_ready]
+    types: [icaiu_report_ready]
   workflow_dispatch:
 
 jobs:
-  run-report-sync:
+  run-sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Install dependencies
-        run: npm install axios
-
-      - name: Execute Report Sync Logic
+          
+      - run: npm install axios
+      
+      - name: Execute Sync
         run: |
           printf "::add-mask::%s\n" "$GOOGLE_TOKEN"
-          node report-sync.js
+          node sync-icaiu.js
         env:
           GOOGLE_TOKEN: ${{ github.event.client_payload.token }}
-          REPORT_SPREADSHEET_ID: ${{ secrets.REPORT_SPREADSHEET_ID }}
-          REPORT_SHEET_NAME: ${{ secrets.REPORT_SHEET_NAME }}
-          REPORT_COLUMN_MAPPING: ${{ secrets.REPORT_COLUMN_MAPPING }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
-          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
           ZOHO_ACCOUNT_OWNER: ${{ secrets.ZOHO_ACCOUNT_OWNER }}
-          ZOHO_APP_LINK_NAME: ${{ secrets.ZOHO_APP_LINK_NAME }}
-          ZOHO_REPORT_LINK_NAME: ${{ secrets.ZOHO_REPORT_LINK_NAME }}
+          REPORT_COLUMN_MAPPING: ${{ secrets.REPORT_COLUMN_MAPPING }}
+          REPORT_SPREADSHEET_ID: ${{ secrets.REPORT_SPREADSHEET_ID }}
+          REPORT_SHEET_NAME: ${{ secrets.REPORT_SHEET_NAME }}
+          ZOHO_APP_NAME: ${{ secrets.ZOHO_APP_ICAIU }}
+          ZOHO_REPORT_NAME: ${{ secrets.ZOHO_REPORT_ICAIU }}
