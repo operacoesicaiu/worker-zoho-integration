@@ -30,6 +30,16 @@ function processField(record, fieldName) {
         if (rawValue.startsWith('+')) return rawValue.substring(1);
     }
 
+    // Tratamento especial para Data_e_hora_de_fim_do_servi_o
+    if (fieldName === 'Data_e_hora_de_fim_do_servi_o' && typeof rawValue === 'string') {
+        const inicio = record['Data_e_hora_de_in_cio_do_servi_o'];
+        if (inicio && typeof inicio === 'string') {
+            const dataPart = inicio.split(' ')[0]; // YYYY-MM-DD
+            return sanitize(`${dataPart} ${rawValue}`);
+        }
+        return sanitize(rawValue);
+    }
+
     if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
         return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
     }
@@ -61,9 +71,9 @@ async function run() {
         const baseUrl = `https://creator.zoho.com/api/v2.1/${owner}/${app}/report/${report}`;
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
 
-        // Calcular intervalo de datas: do dia 1 de 2 meses atrás até hoje
-        const today = new Date();
-        const startOfMonthTwoMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        // Calcular intervalo de datas: apenas ontem
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
         
         // Formatar datas no formato YYYY-MM-DD 
         const formatDate = (date) => {
@@ -73,8 +83,8 @@ async function run() {
             return `${year}-${month}-${day}`;
         };
 
-        const startDateStr = formatDate(startOfMonthTwoMonthsAgo);
-        const endDateStr = formatDate(today);
+        const startDateStr = formatDate(yesterday);
+        const endDateStr = formatDate(yesterday);
 
         // Critério de filtro por data
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${startDateStr}' && Data_e_hora_de_inicio_do_formulario <= '${endDateStr}')`;
