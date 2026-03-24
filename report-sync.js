@@ -126,7 +126,9 @@ async function run() {
             const sheetName = process.env.REPORT_SHEET_NAME;
             
             // Usamos PUT com o range !A2 para sobrescrever os dados antigos
-            const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${sheetName}!A2?valueInputOption=USER_ENTERED`;
+            // Escapar nome da aba com aspas simples se contiver espaços
+            const escapedSheetName = sheetName.includes(' ') ? `'${sheetName}'` : sheetName;
+            const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${escapedSheetName}!A2?valueInputOption=USER_ENTERED`;
 
             await axios.put(
                 urlSheets,
@@ -136,6 +138,7 @@ async function run() {
         }
 
     } catch (e) {
+        console.log('Erro ao processar dados');
         process.exit(1);
     }
 }
