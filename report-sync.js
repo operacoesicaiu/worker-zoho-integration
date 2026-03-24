@@ -35,21 +35,20 @@ async function run() {
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= "${f(inicio)}")`;
         
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
-        const baseUrl = `https://creator.zoho.com/api/v2.1/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_NAME}/report/${process.env.ZOHO_REPORT_NAME}`;
+        const baseUrl = `https://creator.zoho.com/api/v2.1/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_LINK_NAME}/report/${process.env.ZOHO_REPORT_LINK_NAME}`;
 
         async function fetchRecords(queryCriteria) {
             const resp = await axios.get(baseUrl, {
                 params: { from: 1, limit: 200, criteria: queryCriteria },
                 headers: { 
                     'Authorization': `Zoho-oauthtoken ${zohoToken}`,
-                    'Accept': 'application/json' 
+                    'Accept': 'application/json'
                 }
             });
             return resp.data.data || [];
         }
 
-        console.log(`Buscando no Zoho: ${process.env.ZOHO_APP_NAME}`);
-
+        console.log("Buscando dados no Zoho...");
         let data = [];
         try {
             data = await fetchRecords(criteria);
@@ -58,19 +57,23 @@ async function run() {
             data = await fetchRecords(""); 
         }
 
-        // 3. Processar e Enviar
+        // 3. Processar e Enviar para Google Sheets
         if (data.length > 0) {
             const allProcessed = data.map(rec => columns.map(f => processField(rec, f)));
             console.log(`Enviando ${allProcessed.length} registros.`);
-            
+    
+            const sheetId = process.env.REPORT_SPREADSHEET_ID;
+            const range = `${process.env.REPORT_SHEET_NAME}!A2`;
+            const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=USER_ENTERED`;
+
             await axios.put(
-                `https://sheets.googleapis.com/v4/spreadsheets/${process.env.REPORT_SPREADSHEET_ID}/values/${process.env.REPORT_SHEET_NAME}!A2:update?valueInputOption=USER_ENTERED`,
+                urlSheets,
                 { values: allProcessed },
                 { headers: { 'Authorization': `Bearer ${process.env.GOOGLE_TOKEN}` } }
             );
-            console.log("Sincronizacao concluida.");
+            console.log("Sincronizacao concluida com sucesso.");
         } else {
-            console.log("Nenhum registro retornado.");
+            console.log("Nenhum registro encontrado.");
         }
 
     } catch (e) {
