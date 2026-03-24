@@ -30,7 +30,7 @@ function processField(record, fieldName) {
         if (rawValue.startsWith('+')) return rawValue.substring(1);
     }
 
-    // Tratamento especial para Data_e_hora_de_fim_do_servi_o
+    // Tratamento especial para Data_e_hora_de_fim_do_servi_o (Coluna F)
     if (fieldName === 'Data_e_hora_de_fim_do_servi_o' && typeof rawValue === 'string') {
         const inicio = record['Data_e_hora_de_in_cio_do_servi_o'];
         if (inicio && typeof inicio === 'string') {
@@ -40,12 +40,20 @@ function processField(record, fieldName) {
         return sanitize(rawValue);
     }
 
+    // Tratamento de objetos e arrays (Fim do [object Object])
     if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        // Se for objeto, prioriza display_value, senão ID
         return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
     }
 
     if (Array.isArray(rawValue)) {
-        return sanitize(rawValue.map(v => (typeof v === 'object' ? v.display_value || v : v)).join(', '));
+        // Se for array (multi-select), mapeia display_value de cada item
+        return sanitize(rawValue.map(v => {
+            if (typeof v === 'object') {
+                return v.display_value || v.ID || String(v);
+            }
+            return v;
+        }).join(', '));
     }
 
     return sanitize(String(rawValue));
@@ -86,7 +94,7 @@ async function run() {
         const startDateStr = formatDate(yesterday);
         const endDateStr = formatDate(yesterday);
 
-        // Critério de filtro por data
+        // Critério de filtro por data (apenas ontem)
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${startDateStr}' && Data_e_hora_de_inicio_do_formulario <= '${endDateStr}')`;
 
         let allRecords = [];
