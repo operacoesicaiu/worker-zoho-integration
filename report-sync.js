@@ -20,18 +20,14 @@ function extractValue(value) {
     return sanitize(String(value));
 }
 
-// Trata campos específicos baseado no nome da coluna
 function processField(record, fieldName) {
     const rawValue = record[fieldName];
 
-    // 1. Tratamento de Telefone
     if (fieldName.includes("Telefone_de_contato")) {
         const phone = String(rawValue || '');
         return phone.startsWith('+') ? phone.slice(1) : phone;
     }
 
-    // 2. Tratamento de Data Combinada (Início + Fim)
-    // Se for o campo de início, e quisermos a lógica de combinar com o fim
     if (fieldName === "Data_e_hora_de_in_cio_do_servi_o") {
         const dateStart = String(rawValue || '').split(' ')[0];
         const timeEnd = record["Data_e_hora_de_fim_do_servi_o"];
@@ -42,39 +38,48 @@ function processField(record, fieldName) {
         return dateStart;
     }
 
-    // 3. Padrão: Extração de objetos/strings
     return extractValue(rawValue);
 }
 
 async function run() {
-    const {
-        ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
-        ZOHO_ACCOUNT_OWNER, ZOHO_APP_LINK_NAME, ZOHO_REPORT_LINK_NAME,
-        GOOGLE_TOKEN, REPORT_SPREADSHEET_ID, REPORT_SHEET_NAME,
-        REPORT_COLUMN_MAPPING 
-    } = process.env;
+    const config = {
+        zohoClientId: process.env.ZOHO_CLIENT_ID,
+        zohoClientSecret: process.env.ZOHO_CLIENT_SECRET,
+        zohoRefreshToken: process.env.ZOHO_REFRESH_TOKEN,
+        zohoOwner: process.env.ZOHO_ACCOUNT_OWNER,
+        zohoApp: process.env.ZOHO_APP_LINK_NAME,
+        zohoReport: process.env.ZOHO_REPORT_LINK_NAME,
+        googleToken: process.env.GOOGLE_TOKEN,
+        sheetId: process.env.REPORT_SPREADSHEET_ID,
+        sheetName: process.env.REPORT_SHEET_NAME,
+        mapping: process.env.REPORT_COLUMN_MAPPING
+    };
 
-    if (!REPORT_COLUMN_MAPPING) {
-        console.error("Erro: Secret REPORT_COLUMN_MAPPING não configurado.");
+    // Validação sem logar valores sensíveis
+    if (!config.googleToken || !config.mapping || !config.sheetId) {
+        console.error("Erro: Variaveis criticas ausentes no ambiente.");
         process.exit(1);
     }
 
-    const columns = JSON.parse(REPORT_COLUMN_MAPPING);
-    const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
+    const columns = JSON.parse(config.mapping);
+    const gHeaders = { 
+        'Authorization': `Bearer ${config.googleToken}`, 
+        'Content-Type': 'application/json' 
+    };
 
     try {
-        // Auth Zoho
+        console.log("Iniciando busca no Zoho...");
+
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
             params: {
-                refresh_token: ZOHO_REFRESH_TOKEN,
-                client_id: ZOHO_CLIENT_ID,
-                client_secret: ZOHO_CLIENT_SECRET,
+                refresh_token: config.zohoRefreshToken,
+                client_id: config.zohoClientId,
+                client_secret: config.zohoClientSecret,
                 grant_type: 'refresh_token'
             }
         });
         const zohoToken = authRes.data.access_token;
 
-        // Datas (Últimos 2 meses)
         const mesesIngles = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         const hoje = new Date();
         const dataInicio = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
@@ -86,35 +91,50 @@ async function run() {
         let fromIndex = 1;
 
         while (true) {
-            const resp = await axios.get(`https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_APP_LINK_NAME}/report/${ZOHO_REPORT_LINK_NAME}`, {
-                params: { from: fromIndex, limit: 200, criteria: criteria },
-                headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` }
-            });
+            try {
+                const resp = await axios.get(`https://creator.zoho.com/api/v2/${config.zohoOwner}/${config.zohoApp}/report/${config.zohoReport}`, {
+                    params: { from: fromIndex, limit: 200, criteria: criteria },
+                    headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` }
+                });
 
-            const data = resp.data.data || [];
-            if (data.length === 0) break;
+                const data = resp.data.data || [];
+                if (data.length === 0) break;
 
-            data.forEach(record => {
-                const row = columns.map(fieldName => processField(record, fieldName));
-                allProcessed.push(row);
-            });
+                data.forEach(record => {
+                    allProcessed.push(columns.map(fieldName => processField(record, fieldName)));
+                });
 
-            if (data.length < 200) break;
-            fromIndex += 200;
+                if (data.length < 200) break;
+                fromIndex += 200;
+                await sleep(500); 
+            } catch (err) {
+                if (err.response && (err.response.status === 404 || err.response.data.code === 3100)) break;
+                throw err;
+            }
         }
 
         if (allProcessed.length > 0) {
-            console.log(`Enviando ${allProcessed.length} linhas para a aba ${REPORT_SHEET_NAME}...`);
+            console.log(`Enviando ${allProcessed.length} linhas para o Sheets...`);
             
-            // O range A2 garante que os dados entrem abaixo do cabeçalho
-            const urlUpdate = `https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${REPORT_SHEET_NAME}!A2:update?valueInputOption=USER_ENTERED`;
+            const urlUpdate = `https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}/values/${config.sheetName}!A2:update?valueInputOption=USER_ENTERED`;
 
-            await axios.put(urlUpdate, { values: allProcessed }, { headers: gHeaders });
-            console.log("Sucesso!");
+            await axios.put(urlUpdate, { values: allProcessed }, { 
+                headers: gHeaders,
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity
+            });
+            
+            console.log("Concluido.");
+        } else {
+            console.log("Nenhum dado encontrado.");
         }
 
     } catch (e) {
-        console.error("Erro:", e.response ? e.response.data : e.message);
+        console.error("Erro na execucao.");
+        console.error("Mensagem:", e.message);
+        if (e.response && e.response.data) {
+            console.error("Detalhes API:", JSON.stringify(e.response.data));
+        }
         process.exit(1);
     }
 }
