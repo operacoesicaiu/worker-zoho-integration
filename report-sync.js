@@ -65,6 +65,27 @@ async function run() {
         const baseUrl = `https://creator.zoho.com/api/v2.1/${owner}/${app}/report/${report}`;
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
 
+        // Calcular intervalo de datas: do dia 1 de 2 meses atrás até hoje
+        const today = new Date();
+        const startOfMonthTwoMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        
+        // Formatar datas no formato DD-MMM-YYYY
+        const formatDate = (date) => {
+            const day = date.getDate().toString().padStart(2, '0');
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[date.getMonth()];
+            const year = date.getFullYear();
+            return `${day}-${month}-${year}`;
+        };
+
+        const startDateStr = formatDate(startOfMonthTwoMonthsAgo);
+        const endDateStr = formatDate(today);
+        
+        secureLog(`Filtrando registros de ${startDateStr} a ${endDateStr}`);
+
+        // Critério de filtro por data
+        const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${startDateStr}' && Data_e_hora_de_inicio_do_formulario <= '${endDateStr}')`;
+
         let allRecords = [];
         let page = 1;
         const limit = 200;
@@ -77,7 +98,11 @@ async function run() {
             secureLog(`Buscando página ${page} (registros a partir de ${fromIndex})`);
 
             const resp = await axios.get(baseUrl, {
-                params: { from: fromIndex, limit: limit },
+                params: { 
+                    from: fromIndex, 
+                    limit: limit,
+                    criteria: criteria
+                },
                 headers: { 
                     'Authorization': `Zoho-oauthtoken ${zohoToken}`,
                     'Accept': 'application/json'
