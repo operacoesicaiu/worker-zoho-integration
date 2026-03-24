@@ -65,13 +65,12 @@ async function run() {
         const today = new Date();
         const startOfMonthTwoMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         
-        // Formatar datas no formato DD-MMM-YYYY
+        // Formatar datas no formato YYYY-MM-DD 
         const formatDate = (date) => {
-            const day = date.getDate().toString().padStart(2, '0');
-            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const month = months[date.getMonth()];
             const year = date.getFullYear();
-            return `${day}-${month}-${year}`;
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         };
 
         const startDateStr = formatDate(startOfMonthTwoMonthsAgo);
@@ -84,8 +83,8 @@ async function run() {
         let page = 1;
         const limit = 200;
 
-        // LOOP DE PAGINAÇÃO com limite de 50 páginas
-        while (page <= 50) {
+        // LOOP DE PAGINAÇÃO sem limite de páginas 
+        while (true) {
             const fromIndex = (page - 1) * limit + 1;
 
             const resp = await axios.get(baseUrl, {

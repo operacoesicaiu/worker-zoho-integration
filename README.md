@@ -6,6 +6,26 @@ A Node.js worker service that synchronizes data from Zoho Creator applications t
 
 This worker provides automated data synchronization between Zoho Creator applications and Google Sheets, enabling seamless data flow for business operations and reporting needs.
 
+## System Architecture
+
+```mermaid
+graph TB
+    A[Worker Google Auth] -->|Dispatch Event| B[Worker Zoho Integration]
+    B --> C[Zoho Creator API]
+    B --> D[Google Sheets API]
+    C --> E[Application Data]
+    C --> F[Report Data]
+    D --> G[Target Spreadsheet]
+    B --> H[Data Processing Engine]
+    H --> I[Field Mapping]
+    H --> J[Date Filtering]
+    H --> K[Batch Processing]
+    
+    L[GitHub Secrets] --> B
+    M[Environment Variables] --> B
+    N[Column Mapping JSON] --> I
+```
+
 ## Features
 
 - **Zoho Creator Integration**: Fetches data from Zoho Creator applications and reports
@@ -15,7 +35,7 @@ This worker provides automated data synchronization between Zoho Creator applica
 - **Report Generation**: Supports both standard and custom report synchronization
 - **Secure Data Handling**: All sensitive information is properly masked and secured
 
-## Architecture
+## Technical Architecture
 
 ### Components
 
@@ -33,6 +53,54 @@ This worker provides automated data synchronization between Zoho Creator applica
 4. **Date Filtering**: Filters records based on business requirements (e.g., yesterday's data)
 5. **Sheet Update**: Appends or overwrites data in Google Sheets
 6. **Status Reporting**: Reports execution status to monitoring system
+
+## Security Implementation
+
+### Multi-Layer Security Architecture
+
+```mermaid
+graph LR
+    A[GitHub Secrets] --> B[Environment Variables]
+    B --> C[OAuth Authentication]
+    C --> D[API Communication]
+    D --> E[Data Processing]
+    E --> F[Google Sheets]
+    
+    G[Masking Functions] --> H[Log Protection]
+    I[Sanitization] --> J[Input Validation]
+    K[Formula Injection Prevention] --> L[Spreadsheet Security]
+    M[Minimal Permissions] --> N[Attack Surface Reduction]
+```
+
+### Security Features
+
+- **OAuth Security**: Uses OAuth2 authentication for both Google and Zoho APIs
+- **Token Security**: OAuth tokens are received securely via repository dispatch
+- **Data Masking**: All sensitive information is masked in logs
+- **Environment Variables**: Credentials stored securely as environment variables
+- **Minimal Permissions**: GitHub Actions workflows use minimal required permissions
+- **Explicit Secret Masking**: All secrets are explicitly masked in GitHub Actions workflows using `::add-mask::`
+- **Secure Logging**: Custom `secureLog` function ensures no sensitive data is exposed in logs
+- **Spreadsheet Formula Injection Prevention**: Custom `sanitize` function prevents malicious formulas from being injected into Google Sheets
+
+## Data Flow Security
+
+```mermaid
+sequenceDiagram
+    participant Auth as Worker Google Auth
+    participant GH as GitHub Actions
+    participant Zoho as Zoho Creator API
+    participant Sheets as Google Sheets
+    participant Worker as Worker Zoho Integration
+    
+    Auth->>GH: Dispatch Event (masked token)
+    GH->>Worker: Trigger Workflow
+    Worker->>Zoho: Secure Authentication
+    Zoho->>Worker: Application Data
+    Worker->>Sheets: Processed Data (sanitized)
+    Worker->>Sheets: Report Data (sanitized)
+    Note over Worker,Sheets: All data is sanitized before writing
+```
 
 ## Configuration
 
@@ -117,21 +185,37 @@ The worker processes Zoho data with the following logic:
 5. **Data Transformation**: Handles complex field types (lookups, multi-select, etc.)
 6. **Batch Processing**: Sends data in batches to avoid API limits
 
-## Security Features
+## Advanced Features
 
-- **OAuth Security**: Uses OAuth2 authentication for both Google and Zoho APIs
-- **Token Security**: OAuth tokens are received securely via repository dispatch
-- **Data Masking**: All sensitive information is masked in logs
-- **Environment Variables**: Credentials stored securely as environment variables
-- **Minimal Permissions**: GitHub Actions workflows use minimal required permissions
+### Complex Field Handling
 
-## Monitoring
+The worker supports various Zoho field types:
+- **Lookup Fields**: Automatically extracts display values
+- **Multi-select Fields**: Joins multiple values with commas
+- **Date/Time Fields**: Properly formatted for spreadsheet compatibility
+- **Formula Fields**: Handled as regular data fields
 
-Execution status is reported to the central monitoring system:
-- Success/failure status
-- Number of records processed
-- Execution timestamps
-- Error details (with sensitive data masked)
+### Report Synchronization
+
+The report worker provides additional functionality:
+- **Paginated Data**: Handles large datasets with pagination
+- **Custom Reports**: Supports custom Zoho reports
+- **Data Overwrite**: Uses PUT method to overwrite existing data
+- **Flexible Configuration**: Separate configuration for report-specific settings
+
+### Optimization Features
+
+- **Batch Processing**: Uses `append` for data insertion to minimize Google Sheets API quota consumption
+- **Pagination Control**: Implements smart pagination that breaks the loop if no new records are found
+- **Rate Limiting**: Includes delays to respect API rate limits
+- **Efficient Date Filtering**: Filters data at the API level to reduce data transfer
+
+## Monitoring & Observability
+
+* **Execution Logs**: Secure logging with masked sensitive data
+* **Status Tracking**: Integration with cloud-operations-monitor for uptime tracking
+* **Error Reporting**: Structured error handling with secure error messages
+* **Performance Metrics**: Built-in timing and pagination tracking
 
 ## Troubleshooting
 
@@ -157,23 +241,22 @@ All execution logs are processed through secure logging functions that:
 - **Google Sheets API**: Writes processed data
 - **Cloud Operations Monitor**: Reports execution status
 
-## Advanced Features
+## License
 
-### Complex Field Handling
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-The worker supports various Zoho field types:
-- **Lookup Fields**: Automatically extracts display values
-- **Multi-select Fields**: Joins multiple values with commas
-- **Date/Time Fields**: Properly formatted for spreadsheet compatibility
-- **Formula Fields**: Handled as regular data fields
+## Security Compliance
 
-### Report Synchronization
+This implementation follows security best practices:
 
-The report worker provides additional functionality:
-- **Paginated Data**: Handles large datasets with pagination
-- **Custom Reports**: Supports custom Zoho reports
-- **Data Overwrite**: Uses PUT method to overwrite existing data
-- **Flexible Configuration**: Separate configuration for report-specific settings
+- ✅ **Zero Trust Architecture**: No hardcoded secrets or credentials
+- ✅ **Defense in Depth**: Multiple layers of security controls
+- ✅ **Principle of Least Privilege**: Minimal permissions and short-lived tokens
+- ✅ **Secure by Design**: Security built into the architecture from the ground up
+- ✅ **Public Repository Safe**: No sensitive data exposed even in public repositories
+- ✅ **Input Validation**: All external data is validated and sanitized
+- ✅ **Output Encoding**: Prevents injection attacks in Google Sheets
+- ✅ **API Security**: Secure communication with both Zoho and Google APIs
 
 ## Contributing
 
@@ -183,10 +266,11 @@ The report worker provides additional functionality:
 4. Add tests for your changes
 5. Submit a pull request
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Support
 
 For support and questions, please contact the development team.
+
+## Author
+
+**Patrick Araujo - Security Researcher & Computer Engineer**  
+**GitHub**: https://github.com/PkLavc
