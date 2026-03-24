@@ -8,16 +8,35 @@ function secureLog(message) {
 
 function processField(record, fieldName) {
     let rawValue = record[fieldName];
+
+    if (fieldName === 'Data_e_hora_de_fim_do_servi_o') {
+        const dataInicio = record['Data_e_hora_de_in_cio_do_servi_o'] || '';
+        if (dataInicio && rawValue && typeof rawValue === 'string' && rawValue.includes(':')) {
+            const dataApenas = dataInicio.split(' ')[0]; // Pega apenas YYYY-MM-DD
+            const horaApenas = rawValue.split(':').slice(0, 2).join(':'); // Pega HH:mm
+            return `${dataApenas} ${horaApenas}`;
+        }
+    }
+
     if (rawValue === null || rawValue === undefined || rawValue === '') return '';
-    
-    // Sanitização básica para evitar injeção de fórmulas no Sheets
+
+    // 2. Tratamento para Telefones (Remove o +)
+    if (fieldName.includes('Telefone_de_contato') && typeof rawValue === 'string') {
+        return rawValue.startsWith('+') ? rawValue.substring(1) : rawValue;
+    }
+
+    // 3. Tratamento para Objetos (Lookups/Dropdowns - Colunas I, K, L, N)
     if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
-        return rawValue.display_value || rawValue.ID || String(rawValue);
+        // Prioriza o nome de exibição, depois ID, depois string genérica
+        return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
     }
+
+    // 4. Tratamento para Arrays (Multi-select - Coluna J)
     if (Array.isArray(rawValue)) {
-        return rawValue.map(v => (typeof v === 'object' ? v.display_value || v : v)).join(', ');
+        return sanitize(rawValue.map(v => (typeof v === 'object' ? v.display_value || v : v)).join(', '));
     }
-    return String(rawValue);
+
+    return sanitize(String(rawValue));
 }
 
 async function run() {
