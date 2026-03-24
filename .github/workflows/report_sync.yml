@@ -2,7 +2,7 @@ name: Zoho ERP Report Sync (2 Meses)
 
 on:
   repository_dispatch:
-    types: [google_token_ready] 
+    types: [report_token_ready] 
   workflow_dispatch: 
   
 jobs:
