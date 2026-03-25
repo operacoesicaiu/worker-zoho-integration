@@ -9,7 +9,9 @@ function maskSensitiveData(data, maxLength = 8) {
 
 // Função para registrar eventos sem expor dados sensíveis
 function secureLog(message, isError = false) {
-    // Removido logging para evitar mensagens públicas no GitHub Actions
+    const timestamp = new Date().toISOString();
+    const logLevel = isError ? 'ERROR' : 'INFO';
+    console.log(`[${timestamp}] [${logLevel}] ${message}`);
 }
 
 // Função para impedir Spreadsheet Formula Injection
