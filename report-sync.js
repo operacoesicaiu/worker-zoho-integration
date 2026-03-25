@@ -116,8 +116,7 @@ async function run() {
             const colT = getSplitDateTime(E, 0); // Split E (Data)
             // Cálculo para converter a data de 'colT' no número serial do Excel
             const colT_serial = Math.floor((new Date(colT) - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
-            const colQ = colT_serial.toString() + D.toString();
-            const colQ = colT + D;               // T & D
+            const colQ = colT_serial.toString() + D.toString(); // T & D
             const colR = dataR;                  // Split M (Data)
             const colS = getSplitDateTime(M, 1); // Split M (Hora)
             const colU = getSplitDateTime(E, 1); // Split E (Hora)
