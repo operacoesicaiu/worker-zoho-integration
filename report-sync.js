@@ -1,20 +1,21 @@
 const axios = require('axios');
 
-// Função para mascarar dados sensíveis
+// Função para mascarar dados sensíveis (evita vazamentos em logs)
 function maskSensitiveData(data, maxLength = 8) {
     if (!data || typeof data !== 'string') return '[MASKED]';
     if (data.length <= maxLength) return '[MASKED]';
     return data.substring(0, 4) + '*'.repeat(data.length - 8) + data.substring(data.length - 4);
 }
 
-// Função para registrar eventos sem expor dados sensíveis
+// Função para registrar eventos de forma segura
 function secureLog(message, isError = false) {
     const timestamp = new Date().toISOString();
     const logLevel = isError ? 'ERROR' : 'INFO';
-    console.log(`[${timestamp}] [${logLevel}] ${message}`);
+    // Remove qualquer menção direta a tokens reais caso tenham sido passados por engano na mensagem
+    const cleanMessage = message.replace(/[a-zA-Z0-9]{20,}/g, '[LONG_STRING_MASKED]');
+    console.log(`[${timestamp}] [${logLevel}] ${cleanMessage}`);
 }
 
-// Função para impedir Spreadsheet Formula Injection
 function sanitize(val) {
     if (typeof val !== 'string') return val;
     const formulaChars = ['=', '+', '-', '@'];
@@ -32,24 +33,20 @@ function processField(record, fieldName) {
         if (rawValue.startsWith('+')) return rawValue.substring(1);
     }
 
-    // Tratamento especial para Data_e_hora_de_fim_do_servi_o (Coluna F)
     if (fieldName === 'Data_e_hora_de_fim_do_servi_o' && typeof rawValue === 'string') {
         const inicio = record['Data_e_hora_de_in_cio_do_servi_o'];
         if (inicio && typeof inicio === 'string') {
-            const dataPart = inicio.split(' ')[0]; // YYYY-MM-DD
+            const dataPart = inicio.split(' ')[0];
             return sanitize(`${dataPart} ${rawValue}`);
         }
         return sanitize(rawValue);
     }
 
-    // Tratamento de objetos e arrays (Fim do [object Object])
     if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
-        // Se for objeto, prioriza display_value, senão ID
         return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
     }
 
     if (Array.isArray(rawValue)) {
-        // Se for array (multi-select), mapeia display_value de cada item
         return sanitize(rawValue.map(v => {
             if (typeof v === 'object') {
                 return v.display_value || v.ID || String(v);
@@ -63,7 +60,9 @@ function processField(record, fieldName) {
 
 async function run() {
     try {
-        // Autenticação Zoho
+        secureLog('Iniciando processo de sincronização...');
+
+        // 1. Autenticação Zoho
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
             params: {
                 refresh_token: process.env.ZOHO_REFRESH_TOKEN,
@@ -73,70 +72,50 @@ async function run() {
             }
         });
         const zohoToken = authRes.data.access_token;
+        secureLog('Autenticação Zoho realizada com sucesso.');
 
-        // Configurações
-        const owner = process.env.ZOHO_ACCOUNT_OWNER;
-        const app = process.env.ZOHO_APP_NAME;
-        const report = process.env.ZOHO_REPORT_NAME;
-        const baseUrl = `https://creator.zoho.com/api/v2.1/${owner}/${app}/report/${report}`;
+        // 2. Configurações
         const columns = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
+        const baseUrl = `https://creator.zoho.com/api/v2.1/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_NAME}/report/${process.env.ZOHO_REPORT_NAME}`;
 
-        // Calcular intervalo de datas: apenas ontem
+        // 3. Datas
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
+        const formatDate = (date) => date.toISOString().split('T')[0];
+        const dateStr = formatDate(yesterday);
         
-        // Formatar datas no formato YYYY-MM-DD 
-        const formatDate = (date) => {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
+        const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${dateStr}' && Data_e_hora_de_inicio_do_formulario <= '${dateStr}')`;
+        secureLog(`Buscando dados para a data: ${dateStr}`);
 
-        const startDateStr = formatDate(yesterday);
-        const endDateStr = formatDate(yesterday);
-
-        // Critério de filtro por data (apenas ontem)
-        const criteria = `(Data_e_hora_de_inicio_do_formulario >= '${startDateStr}' && Data_e_hora_de_inicio_do_formulario <= '${endDateStr}')`;
-
+        // 4. Busca de Dados (Paginação)
         let allRecords = [];
         let page = 1;
         const limit = 200;
 
-        // LOOP DE PAGINAÇÃO sem limite de páginas 
         while (true) {
             const fromIndex = (page - 1) * limit + 1;
-
             const resp = await axios.get(baseUrl, {
-                params: { 
-                    from: fromIndex, 
-                    limit: limit,
-                    criteria: criteria
-                },
-                headers: { 
-                    'Authorization': `Zoho-oauthtoken ${zohoToken}`,
-                    'Accept': 'application/json'
-                }
+                params: { from: fromIndex, limit: limit, criteria: criteria },
+                headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}`, 'Accept': 'application/json' }
             });
 
             const records = resp.data.data || [];
             if (records.length === 0) break;
 
             allRecords = allRecords.concat(records);
-
-            if (records.length < limit) break; // Se veio menos que 200, é a última página
+            secureLog(`Página ${page}: ${records.length} registros encontrados.`);
+            
+            if (records.length < limit) break;
             page++;
         }
 
-        // Processar e Enviar para Google Sheets
+        // 5. Envio para Google Sheets
         if (allRecords.length > 0) {
+            secureLog(`Processando ${allRecords.length} registros para o Google Sheets...`);
             const allProcessed = allRecords.map(rec => columns.map(f => processField(rec, f)));
             
             const sheetId = process.env.REPORT_SPREADSHEET_ID;
             const sheetName = process.env.REPORT_SHEET_NAME;
-            
-            // Usamos PUT com o range !A2 para sobrescrever os dados antigos
-            // Escapar nome da aba com aspas simples se contiver espaços
             const escapedSheetName = sheetName.includes(' ') ? `'${sheetName}'` : sheetName;
             const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${escapedSheetName}!A2?valueInputOption=USER_ENTERED`;
 
@@ -145,11 +124,22 @@ async function run() {
                 { values: allProcessed },
                 { headers: { 'Authorization': `Bearer ${process.env.GOOGLE_TOKEN}` } }
             );
+            secureLog('Dados enviados com sucesso para o Google Sheets.');
+        } else {
+            secureLog('Nenhum registro encontrado para sincronizar.');
         }
 
     } catch (e) {
-        console.log('Erro ao processar dados');
+        // Tratamento de erro detalhado e seguro
+        let errorDetail = e.message;
+        if (e.response && e.response.data) {
+            // Se o Zoho ou Google retornar erro, pegamos a mensagem da API
+            errorDetail = `API_ERROR: ${JSON.stringify(e.response.data)}`;
+        }
+        
+        secureLog(`Falha no processamento: ${errorDetail}`, true);
         process.exit(1);
     }
 }
+
 run();
