@@ -109,23 +109,30 @@ async function run() {
         });
 
         const finalData = preProcessed.map(({ row, dataR, key }) => {
-            // Referências amigáveis baseadas no seu pedido (índice = letra - 1)
             const B = row[1], C = row[2], D = row[3], E = row[4], G = row[6], M = row[12], N = row[13], O = row[14];
-
-            const colP = dictionary[N] || ''; // PROCV(N;Dicionário)
-            const colT = getSplitDateTime(E, 0); // Split E (Data)
-            // Cálculo para converter a data de 'colT' no número serial do Excel
-            const colT_serial = Math.floor((new Date(colT) - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
-            const colQ = colT_serial.toString() + D.toString(); // T & D
-            const colR = dataR;                  // Split M (Data)
-            const colS = getSplitDateTime(M, 1); // Split M (Hora)
-            const colU = getSplitDateTime(E, 1); // Split E (Hora)
+        
+            const colP = dictionary[N] || ''; 
+            const colT_raw = getSplitDateTime(E, 0); 
+            
+            // --- AJUSTE COLUNA Q e D ---
+            // Forçamos a Coluna D (row[3]) a manter o zero à esquerda se já tiver
+            // E a Coluna Q a ser texto para não virar E+15
+            const colT_serial = Math.floor((new Date(colT_raw) - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
+            const colQ = `'${colT_serial.toString()}${D.toString()}`; // O ' força texto no Sheets
+            
+            // --- AJUSTE COLUNAS R e T (Separador /) ---
+            // Se a data vier como 25-Mar-2026, transformamos em 25/Mar/2026
+            const colR = dataR.replace(/-/g, '/');
+            const colT = colT_raw.replace(/-/g, '/');
+        
+            const colS = getSplitDateTime(M, 1);
+            const colU = getSplitDateTime(E, 1);
             
             const colV = G === "Novo serviço" ? 1 : 0;
             const colW = G === "Avaliação Store" ? 1 : 0;
             const colX = G === "Retirada" ? 1 : 0;
             const colY = G === "Garantia" ? 1 : 0;
-            const colZ = countMap[key] === 1 ? 1 : 0; // CONT.SES
+            const colZ = countMap[key] === 1 ? 1 : 0;
             const colAA = 1;
             const colAB = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAC = O === "Cliente reagendou" ? 0 : 1;
@@ -133,15 +140,18 @@ async function run() {
             const colAE = (B === "Cliente cancelou o serviço" && O !== "Cliente reagendou") ? 1 : 0;
             const colAF = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAG = 0;
-
-            // MÊS(R) & "/" & ANO(R)
+        
             let colAH = "";
             if (colR) {
-                const parts = colR.split('-'); // Esperado DD-MMM-YYYY ou similar
+                const parts = colR.split('/'); 
                 if (parts.length === 3) colAH = `${parts[1]}/${parts[2]}`;
             }
-
-            return [...row, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
+        
+            // Na hora de retornar, garantimos que a Coluna D (índice 3) também seja tratada como texto
+            const updatedRow = [...row];
+            updatedRow[3] = `'${D}`; // Garante o 0 à esquerda na coluna D
+        
+            return [...updatedRow, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
         });
 
         // 5. Upload
