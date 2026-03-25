@@ -2,7 +2,7 @@ name: iCaiu Sync
 
 on:
   repository_dispatch:
-    types: [report_token_ready]
+    types: [google_token_ready]
   workflow_dispatch:
 
 jobs:
