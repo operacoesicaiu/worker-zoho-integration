@@ -91,13 +91,29 @@ async function run() {
         });
 
         const finalData = zohoRecords.map(rec => {
-            const row = mapping.map(f => {
+            const row = mapping.map((f, index) => {
                 let v = formatZohoValue(rec[f]);
-                if (['=','+','-','@'].some(c => v.startsWith(c))) v = `'${v}`;
+                
+                // CORREÇÃO COLUNA A: Mantém o sinal de '+' e evita que o Sheets remova
+                if (index === 0 && v.includes('+')) {
+                    v = `'${v}`; 
+                }
+                
+                // Escape para outros caracteres especiais (exceto coluna A já tratada)
+                if (index !== 0 && ['=', '+', '-', '@'].some(c => v.startsWith(c))) {
+                    v = `'${v}`;
+                }
                 return v;
             });
 
-            const [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O] = row;
+            let [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O] = row;
+
+            // CORREÇÃO COLUNA F: Se vier apenas a hora (ex: 14:30), combina com a data da coluna E
+            if (F && F.includes(':') && !F.includes('-') && !F.includes('/')) {
+                const dataParte = (E || '').split(' ')[0]; // Pega o YYYY-MM-DD da coluna E
+                if (dataParte) F = `${dataParte} ${F}`;
+            }
+
             const dM_raw = (M || '').split(' ')[0] || '';
             const dE_raw = (E || '').split(' ')[0] || '';
             const colR = dM_raw.split('-').join('/');
@@ -127,7 +143,10 @@ async function run() {
             const colAG = 0;
             const colAH = colR.includes('/') ? `${colR.split('/')[1]}/${colR.split('/')[2]}` : '';
 
+            row[0] = A; 
+            row[5] = F; 
             row[3] = `'${D}`; 
+            
             return [...row, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
         });
 
