@@ -15,8 +15,11 @@ async function run() {
         } = process.env;
 
         const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
+        
+        // Proteção essencial para o nome da aba
+        const safeSheet = `'${REPORT_SHEET_NAME}'`;
 
-        // 1. Auth Zoho
+        // 1. Token Zoho
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
             params: { refresh_token: ZOHO_REFRESH_TOKEN, client_id: ZOHO_CLIENT_ID, client_secret: ZOHO_CLIENT_SECRET, grant_type: 'refresh_token' }
         });
@@ -29,7 +32,7 @@ async function run() {
         const formatZohoDate = (d) => `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= "${formatZohoDate(startDate)}" && Data_e_hora_de_inicio_do_formulario <= "${formatZohoDate(today)}")`;
 
-        // 3. Coleta Zoho (Máximo 10k registros)
+        // 3. Coleta Zoho
         let zohoRecords = [];
         let fromIndex = 1;
         while (zohoRecords.length < 10000) {
@@ -43,58 +46,29 @@ async function run() {
             if (data.length < 200) break;
             fromIndex += 200;
         }
-        secureLog(`Zoho: ${zohoRecords.length} registros encontrados.`);
+        secureLog(`Registros Zoho: ${zohoRecords.length}`);
 
-        // 4. Localizar ponto de corte (Busca Reversa Paginada)
-        // Pegamos os metadados da planilha para saber o tamanho total
-        const spreadsheet = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}`, { headers: gHeaders });
-        const sheet = spreadsheet.data.sheets.find(s => s.properties.title === REPORT_SHEET_NAME);
-        let lastRowInSheet = sheet.properties.gridProperties.rowCount;
-        
-        let deleteFromRow = lastRowInSheet + 1;
-        let foundBorder = false;
-        const pageSize = 1000;
+        // 4. Localizar linha de corte (Busca Reversa Simples)
+        const resR = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${safeSheet}!R:R`, { headers: gHeaders });
+        const allDates = resR.data.values || [];
+        let deleteFromRow = allDates.length + 1;
 
-        secureLog(`Iniciando busca reversa por data de corte na planilha (${lastRowInSheet} linhas totais)...`);
-
-        for (let end = lastRowInSheet; end > 1; end -= pageSize) {
-            const start = Math.max(2, end - pageSize + 1);
-            const range = `'${REPORT_SHEET_NAME}'!R${start}:R${end}`;
-            
-            const res = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${range}`, { headers: gHeaders });
-            const rows = res.data.values || [];
-            
-            // Analisamos o lote de baixo para cima
-            for (let j = rows.length - 1; j >= 0; j--) {
-                const dateStr = rows[j][0];
-                if (!dateStr) continue;
-
-                // Converte DD/MMM/YYYY para Date
-                const p = dateStr.replace(/'/g, '').split('/');
-                const rowDate = new Date(`${p[1]} ${p[0]}, ${p[2]}`);
-
-                if (rowDate >= startDate) {
-                    deleteFromRow = start + j; // Linha que deve ser apagada
-                } else {
-                    foundBorder = true;
-                    break;
-                }
-            }
-            if (foundBorder) break;
+        for (let i = allDates.length - 1; i >= 1; i--) {
+            const dateStr = allDates[i][0];
+            if (!dateStr) continue;
+            const p = dateStr.replace(/'/g, '').split('/');
+            if (p.length < 3) continue;
+            const rowDate = new Date(`${p[1]} ${p[0]}, ${p[2]}`);
+            if (rowDate >= startDate) deleteFromRow = i + 1;
+            else break;
         }
 
-        // 5. Processamento dos Dados do Zoho
+        // 5. Processamento (Formatos / e ')
         const mapping = JSON.parse(REPORT_COLUMN_MAPPING);
-        const dictionary = await (async () => {
-            try {
-                const r = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'Dicionário'!A:B`, { headers: gHeaders });
-                const d = {};
-                if (r.data.values) r.data.values.forEach(row => d[row[0]] = row[1] || '');
-                return d;
-            } catch { return {}; }
-        })();
+        const dictRes = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'Dicionário'!A:B`, { headers: gHeaders }).catch(() => ({data:{}}));
+        const dictionary = {};
+        if (dictRes.data.values) dictRes.data.values.forEach(r => dictionary[r[0]] = r[1]);
 
-        // Mapa de contagem (CONT.SES)
         const countMap = {};
         zohoRecords.forEach(rec => {
             const dR = (rec[mapping[12]] || '').split(' ')[0];
@@ -104,33 +78,30 @@ async function run() {
 
         const finalData = zohoRecords.map(rec => {
             const row = mapping.map(f => {
-                let v = rec[f];
-                if (typeof v === 'object' && v !== null) v = v.display_value || v.ID || String(v);
-                return (typeof v === 'string' && ['=','+','-','@'].some(c => v.startsWith(c))) ? `'${v}` : v;
+                let v = rec[f] ?? '';
+                if (typeof v === 'object') v = v.display_value || v.ID || String(v);
+                return v;
             });
 
             const [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O] = row;
-            const dataM_raw = (M || '').split(' ')[0];
-            const dataE_raw = (E || '').split(' ')[0];
-            const horaM = (M || '').split(' ')[1] || '';
-            const horaE = (E || '').split(' ')[1] || '';
+            const dM = (M || '').split(' ')[0] || '';
+            const dE = (E || '').split(' ')[0] || '';
+            const serialT = dE ? Math.floor((new Date(dE) - new Date(1899, 11, 30)) / 86400000) : '';
 
-            const serialT = Math.floor((new Date(dataE_raw) - new Date(1899, 11, 30)) / 86400000);
-            
-            // FORMATAÇÕES SOLICITADAS
-            const colQ = `'${serialT}${D}`; // Evita E+15 e mantém 0
-            const colR = dataM_raw.replace(/-/g, '/'); // Data com /
-            const colT = dataE_raw.replace(/-/g, '/'); // Data com /
-            row[3] = `'${D}`; // Coluna D com 0 à esquerda
+            // Aplicando suas regras
+            const colQ = `'${serialT}${D}`;
+            const colR = dM.replace(/-/g, '/');
+            const colT = dE.replace(/-/g, '/');
+            row[3] = `'${D}`; // Coluna D original
 
             const colP = dictionary[N] || '';
-            const colS = horaM;
-            const colU = horaE;
+            const colS = (M || '').split(' ')[1] || '';
+            const colU = (E || '').split(' ')[1] || '';
             const colV = G === "Novo serviço" ? 1 : 0;
             const colW = G === "Avaliação Store" ? 1 : 0;
             const colX = G === "Retirada" ? 1 : 0;
             const colY = G === "Garantia" ? 1 : 0;
-            const colZ = countMap[`${C}|${dataM_raw}`] === 1 ? 1 : 0;
+            const colZ = countMap[`${C}|${dM}`] === 1 ? 1 : 0;
             const colAA = 1;
             const colAB = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAC = O === "Cliente reagendou" ? 0 : 1;
@@ -138,29 +109,31 @@ async function run() {
             const colAE = (B === "Cliente cancelou o serviço" && O !== "Cliente reagendou") ? 1 : 0;
             const colAF = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAG = 0;
-            const colAH = colR ? `${colR.split('/')[1]}/${colR.split('/')[2]}` : '';
+            const colAH = colR.includes('/') ? `${colR.split('/')[1]}/${colR.split('/')[2]}` : '';
 
             return [...row, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
         });
 
         // 6. Limpeza e Upload
-        if (deleteFromRow <= lastRowInSheet) {
-            secureLog(`Limpando da linha ${deleteFromRow} até ${lastRowInSheet}`);
-            await axios.post(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'${REPORT_SHEET_NAME}'!A${deleteFromRow}:AH${lastRowInSheet}:clear`, {}, { headers: gHeaders });
+        if (deleteFromRow <= allDates.length) {
+            secureLog(`Limpando a partir da linha ${deleteFromRow}`);
+            const rangeClear = `${safeSheet}!A${deleteFromRow}:AH${allDates.length}`;
+            await axios.post(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${rangeClear}:clear`, {}, { headers: gHeaders });
         }
 
-        secureLog(`Fazendo upload de ${finalData.length} linhas...`);
+        secureLog(`Enviando ${finalData.length} linhas...`);
         const batchSize = 500;
         for (let i = 0; i < finalData.length; i += batchSize) {
             const batch = finalData.slice(i, i + batchSize);
-            await axios.put(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'${REPORT_SHEET_NAME}'!A${deleteFromRow + i}?valueInputOption=USER_ENTERED`, 
+            const rangeUpload = `${safeSheet}!A${deleteFromRow + i}`;
+            await axios.put(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${rangeUpload}?valueInputOption=USER_ENTERED`, 
                 { values: batch }, { headers: gHeaders });
         }
 
-        secureLog("Sucesso!");
+        secureLog("Sincronização concluída com sucesso!");
 
     } catch (e) {
-        secureLog(`ERRO: ${e.message}`, true);
+        secureLog(`ERRO: ${e.response ? JSON.stringify(e.response.data) : e.message}`, true);
         process.exit(1);
     }
 }
