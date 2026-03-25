@@ -3,136 +3,134 @@ const axios = require('axios');
 function secureLog(message, isError = false) {
     const timestamp = new Date().toISOString();
     const logLevel = isError ? 'ERROR' : 'INFO';
-    const cleanMessage = message.replace(/[a-zA-Z0-9]{20,}/g, '[MASKED]');
-    console.log(`[${timestamp}] [${logLevel}] ${cleanMessage}`);
-}
-
-function sanitize(val) {
-    if (typeof val !== 'string') return val;
-    const formulaChars = ['=', '+', '-', '@'];
-    if (formulaChars.some(char => val.startsWith(char))) return `'${val}`;
-    return val;
-}
-
-// Auxiliar para Split de Data/Hora (Simula o SPLIT do Excel)
-function getSplitDateTime(val, index) {
-    if (!val || typeof val !== 'string') return '';
-    const parts = val.split(' ');
-    return parts[index] || '';
-}
-
-async function getDictionary(sheetId, googleToken) {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/'Dicionário'!A:B`;
-    try {
-        const res = await axios.get(url, { headers: { 'Authorization': `Bearer ${googleToken}` } });
-        const dict = {};
-        if (res.data.values) {
-            res.data.values.forEach(row => {
-                if (row[0]) dict[row[0]] = row[1] || '';
-            });
-        }
-        return dict;
-    } catch (e) {
-        secureLog('Erro ao carregar Dicionário. Prosseguindo vazio.', true);
-        return {};
-    }
-}
-
-function processField(record, fieldName) {
-    let rawValue = record[fieldName];
-    if (rawValue === null || rawValue === undefined || rawValue === '') return '';
-    if (fieldName.includes('Telefone_de_contato') && typeof rawValue === 'string') {
-        if (rawValue.startsWith('+')) return rawValue.substring(1);
-    }
-    if (typeof rawValue === 'object' && !Array.isArray(rawValue)) {
-        return sanitize(rawValue.display_value || rawValue.ID || String(rawValue));
-    }
-    if (Array.isArray(rawValue)) {
-        return sanitize(rawValue.map(v => (typeof v === 'object' ? v.display_value || v.ID : v)).join(', '));
-    }
-    return sanitize(String(rawValue));
+    console.log(`[${timestamp}] [${logLevel}] ${message}`);
 }
 
 async function run() {
     try {
-        secureLog('Iniciando sincronização com Colunas Calculadas...');
+        const {
+            ZOHO_REFRESH_TOKEN, ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET,
+            ZOHO_ACCOUNT_OWNER, ZOHO_APP_NAME, ZOHO_REPORT_NAME,
+            REPORT_SPREADSHEET_ID, REPORT_SHEET_NAME, GOOGLE_TOKEN, REPORT_COLUMN_MAPPING
+        } = process.env;
 
-        // 1. Tokens e Dicionário
+        const gHeaders = { 'Authorization': `Bearer ${GOOGLE_TOKEN}`, 'Content-Type': 'application/json' };
+
+        // 1. Auth Zoho
         const authRes = await axios.post('https://accounts.zoho.com/oauth/v2/token', null, {
-            params: {
-                refresh_token: process.env.ZOHO_REFRESH_TOKEN,
-                client_id: process.env.ZOHO_CLIENT_ID,
-                client_secret: process.env.ZOHO_CLIENT_SECRET,
-                grant_type: 'refresh_token'
-            }
+            params: { refresh_token: ZOHO_REFRESH_TOKEN, client_id: ZOHO_CLIENT_ID, client_secret: ZOHO_CLIENT_SECRET, grant_type: 'refresh_token' }
         });
         const zohoToken = authRes.data.access_token;
-        const dictionary = await getDictionary(process.env.REPORT_SPREADSHEET_ID, process.env.GOOGLE_TOKEN);
 
-        // 2. Datas e Critério
+        // 2. Datas (2 meses)
         const today = new Date();
         const startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         const formatZohoDate = (d) => `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
-        
         const criteria = `(Data_e_hora_de_inicio_do_formulario >= "${formatZohoDate(startDate)}" && Data_e_hora_de_inicio_do_formulario <= "${formatZohoDate(today)}")`;
 
-        // 3. Coleta de Dados
-        let allRecords = [];
+        // 3. Coleta Zoho (Máximo 10k registros)
+        let zohoRecords = [];
         let fromIndex = 1;
-        const limit = 200;
-        const baseUrl = `https://creator.zoho.com/api/v2/${process.env.ZOHO_ACCOUNT_OWNER}/${process.env.ZOHO_APP_NAME}/report/${process.env.ZOHO_REPORT_NAME}`;
-
-        while (allRecords.length < 10000) {
-            const resp = await axios.get(baseUrl, {
-                params: { from: fromIndex, limit: limit, criteria: criteria },
+        while (zohoRecords.length < 10000) {
+            const resp = await axios.get(`https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_APP_NAME}/report/${ZOHO_REPORT_NAME}`, {
+                params: { from: fromIndex, limit: 200, criteria: criteria },
                 headers: { 'Authorization': `Zoho-oauthtoken ${zohoToken}` }
             });
-            const records = resp.data.data || [];
-            if (records.length === 0) break;
-            allRecords = allRecords.concat(records);
-            if (records.length < limit) break;
-            fromIndex += limit;
+            const data = resp.data.data || [];
+            if (data.length === 0) break;
+            zohoRecords = zohoRecords.concat(data);
+            if (data.length < 200) break;
+            fromIndex += 200;
+        }
+        secureLog(`Zoho: ${zohoRecords.length} registros encontrados.`);
+
+        // 4. Localizar ponto de corte (Busca Reversa Paginada)
+        // Pegamos os metadados da planilha para saber o tamanho total
+        const spreadsheet = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}`, { headers: gHeaders });
+        const sheet = spreadsheet.data.sheets.find(s => s.properties.title === REPORT_SHEET_NAME);
+        let lastRowInSheet = sheet.properties.gridProperties.rowCount;
+        
+        let deleteFromRow = lastRowInSheet + 1;
+        let foundBorder = false;
+        const pageSize = 1000;
+
+        secureLog(`Iniciando busca reversa por data de corte na planilha (${lastRowInSheet} linhas totais)...`);
+
+        for (let end = lastRowInSheet; end > 1; end -= pageSize) {
+            const start = Math.max(2, end - pageSize + 1);
+            const range = `'${REPORT_SHEET_NAME}'!R${start}:R${end}`;
+            
+            const res = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/${range}`, { headers: gHeaders });
+            const rows = res.data.values || [];
+            
+            // Analisamos o lote de baixo para cima
+            for (let j = rows.length - 1; j >= 0; j--) {
+                const dateStr = rows[j][0];
+                if (!dateStr) continue;
+
+                // Converte DD/MMM/YYYY para Date
+                const p = dateStr.replace(/'/g, '').split('/');
+                const rowDate = new Date(`${p[1]} ${p[0]}, ${p[2]}`);
+
+                if (rowDate >= startDate) {
+                    deleteFromRow = start + j; // Linha que deve ser apagada
+                } else {
+                    foundBorder = true;
+                    break;
+                }
+            }
+            if (foundBorder) break;
         }
 
-        // 4. Processamento das Colunas (A até O baseadas no Zoho, P em diante calculadas)
-        const columnsMapping = JSON.parse(process.env.REPORT_COLUMN_MAPPING);
-        
-        // Mapa para CONT.SES (Coluna Z) - Conta ocorrências de (C + R)
+        // 5. Processamento dos Dados do Zoho
+        const mapping = JSON.parse(REPORT_COLUMN_MAPPING);
+        const dictionary = await (async () => {
+            try {
+                const r = await axios.get(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'Dicionário'!A:B`, { headers: gHeaders });
+                const d = {};
+                if (r.data.values) r.data.values.forEach(row => d[row[0]] = row[1] || '');
+                return d;
+            } catch { return {}; }
+        })();
+
+        // Mapa de contagem (CONT.SES)
         const countMap = {};
-        const preProcessed = allRecords.map(rec => {
-            const row = columnsMapping.map(f => processField(rec, f));
-            const dataR = getSplitDateTime(row[12], 0); // Coluna M (índice 12)
-            const key = `${row[2]}|${dataR}`; // Chave: Coluna C + Data da M
+        zohoRecords.forEach(rec => {
+            const dR = (rec[mapping[12]] || '').split(' ')[0];
+            const key = `${rec[mapping[2]]}|${dR}`;
             countMap[key] = (countMap[key] || 0) + 1;
-            return { row, dataR, key };
         });
 
-        const finalData = preProcessed.map(({ row, dataR, key }) => {
-            const B = row[1], C = row[2], D = row[3], E = row[4], G = row[6], M = row[12], N = row[13], O = row[14];
-        
-            const colP = dictionary[N] || ''; 
-            const colT_raw = getSplitDateTime(E, 0); 
+        const finalData = zohoRecords.map(rec => {
+            const row = mapping.map(f => {
+                let v = rec[f];
+                if (typeof v === 'object' && v !== null) v = v.display_value || v.ID || String(v);
+                return (typeof v === 'string' && ['=','+','-','@'].some(c => v.startsWith(c))) ? `'${v}` : v;
+            });
+
+            const [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O] = row;
+            const dataM_raw = (M || '').split(' ')[0];
+            const dataE_raw = (E || '').split(' ')[0];
+            const horaM = (M || '').split(' ')[1] || '';
+            const horaE = (E || '').split(' ')[1] || '';
+
+            const serialT = Math.floor((new Date(dataE_raw) - new Date(1899, 11, 30)) / 86400000);
             
-            // --- AJUSTE COLUNA Q e D ---
-            // Forçamos a Coluna D (row[3]) a manter o zero à esquerda se já tiver
-            // E a Coluna Q a ser texto para não virar E+15
-            const colT_serial = Math.floor((new Date(colT_raw) - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
-            const colQ = `'${colT_serial.toString()}${D.toString()}`; // O ' força texto no Sheets
-            
-            // --- AJUSTE COLUNAS R e T (Separador /) ---
-            // Se a data vier como 25-Mar-2026, transformamos em 25/Mar/2026
-            const colR = dataR.replace(/-/g, '/');
-            const colT = colT_raw.replace(/-/g, '/');
-        
-            const colS = getSplitDateTime(M, 1);
-            const colU = getSplitDateTime(E, 1);
-            
+            // FORMATAÇÕES SOLICITADAS
+            const colQ = `'${serialT}${D}`; // Evita E+15 e mantém 0
+            const colR = dataM_raw.replace(/-/g, '/'); // Data com /
+            const colT = dataE_raw.replace(/-/g, '/'); // Data com /
+            row[3] = `'${D}`; // Coluna D com 0 à esquerda
+
+            const colP = dictionary[N] || '';
+            const colS = horaM;
+            const colU = horaE;
             const colV = G === "Novo serviço" ? 1 : 0;
             const colW = G === "Avaliação Store" ? 1 : 0;
             const colX = G === "Retirada" ? 1 : 0;
             const colY = G === "Garantia" ? 1 : 0;
-            const colZ = countMap[key] === 1 ? 1 : 0;
+            const colZ = countMap[`${C}|${dataM_raw}`] === 1 ? 1 : 0;
             const colAA = 1;
             const colAB = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAC = O === "Cliente reagendou" ? 0 : 1;
@@ -140,33 +138,29 @@ async function run() {
             const colAE = (B === "Cliente cancelou o serviço" && O !== "Cliente reagendou") ? 1 : 0;
             const colAF = B === "Cliente realizou o serviço" ? 1 : 0;
             const colAG = 0;
-        
-            let colAH = "";
-            if (colR) {
-                const parts = colR.split('/'); 
-                if (parts.length === 3) colAH = `${parts[1]}/${parts[2]}`;
-            }
-        
-            // Na hora de retornar, garantimos que a Coluna D (índice 3) também seja tratada como texto
-            const updatedRow = [...row];
-            updatedRow[3] = `'${D}`; // Garante o 0 à esquerda na coluna D
-        
-            return [...updatedRow, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
+            const colAH = colR ? `${colR.split('/')[1]}/${colR.split('/')[2]}` : '';
+
+            return [...row, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
         });
 
-        // 5. Upload
-        const sheetId = process.env.REPORT_SPREADSHEET_ID;
-        const sheetName = process.env.REPORT_SHEET_NAME;
-        const urlSheets = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/'${sheetName}'!A2?valueInputOption=USER_ENTERED`;
+        // 6. Limpeza e Upload
+        if (deleteFromRow <= lastRowInSheet) {
+            secureLog(`Limpando da linha ${deleteFromRow} até ${lastRowInSheet}`);
+            await axios.post(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'${REPORT_SHEET_NAME}'!A${deleteFromRow}:AH${lastRowInSheet}:clear`, {}, { headers: gHeaders });
+        }
 
-        await axios.put(urlSheets, { values: finalData }, {
-            headers: { 'Authorization': `Bearer ${process.env.GOOGLE_TOKEN}` }
-        });
+        secureLog(`Fazendo upload de ${finalData.length} linhas...`);
+        const batchSize = 500;
+        for (let i = 0; i < finalData.length; i += batchSize) {
+            const batch = finalData.slice(i, i + batchSize);
+            await axios.put(`https://sheets.googleapis.com/v4/spreadsheets/${REPORT_SPREADSHEET_ID}/values/'${REPORT_SHEET_NAME}'!A${deleteFromRow + i}?valueInputOption=USER_ENTERED`, 
+                { values: batch }, { headers: gHeaders });
+        }
 
-        secureLog(`Sincronização completa: ${finalData.length} linhas enviadas.`);
+        secureLog("Sucesso!");
 
     } catch (e) {
-        secureLog(`Erro: ${e.message}`, true);
+        secureLog(`ERRO: ${e.message}`, true);
         process.exit(1);
     }
 }
