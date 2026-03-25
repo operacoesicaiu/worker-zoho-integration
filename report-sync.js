@@ -94,23 +94,18 @@ async function run() {
             const row = mapping.map((f, index) => {
                 let v = formatZohoValue(rec[f]);
                 
-                // CORREÇÃO COLUNA A: Mantém o sinal de '+' e evita que o Sheets remova
-                if (index === 0 && v.includes('+')) {
-                    v = `'${v}`; 
-                }
+                // CORREÇÃO 1: Remove o '+' do telefone (Coluna A)
+                if (index === 0 && v.startsWith('+')) v = v.substring(1);
                 
-                // Escape para outros caracteres especiais (exceto coluna A já tratada)
-                if (index !== 0 && ['=', '+', '-', '@'].some(c => v.startsWith(c))) {
-                    v = `'${v}`;
-                }
+                if (['=', '+', '-', '@'].some(c => v.startsWith(c))) v = `'${v}`;
                 return v;
             });
 
             let [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O] = row;
 
-            // CORREÇÃO COLUNA F: Se vier apenas a hora (ex: 14:30), combina com a data da coluna E
+            // CORREÇÃO 2: Se F for só hora, puxa a data de E
             if (F && F.includes(':') && !F.includes('-') && !F.includes('/')) {
-                const dataParte = (E || '').split(' ')[0]; // Pega o YYYY-MM-DD da coluna E
+                const dataParte = (E || '').split(' ')[0];
                 if (dataParte) F = `${dataParte} ${F}`;
             }
 
@@ -145,7 +140,7 @@ async function run() {
 
             row[0] = A; 
             row[5] = F; 
-            row[3] = `'${D}`; 
+            row[3] = `'${D}`;
             
             return [...row, colP, colQ, colR, colS, colT, colU, colV, colW, colX, colY, colZ, colAA, colAB, colAC, colAD, colAE, colAF, colAG, colAH];
         });
