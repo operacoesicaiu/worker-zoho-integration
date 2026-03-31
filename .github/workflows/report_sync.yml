@@ -3,7 +3,7 @@ name: iCaiu Sync
 on:
   repository_dispatch:
     types: [google_token_ready]
-  workflow_dispatch:
+  # workflow_dispatch:
 
 jobs:
   run-sync:
