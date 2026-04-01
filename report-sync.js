@@ -121,7 +121,7 @@ async function run() {
             }
 
             const colQ = `'${serialT}${D}`;
-            const colP = dictionary[N] || '';
+            const colP = dictionary[N] || N;
             const colS = (M || '').split(' ')[1] || '';
             const colU = (E || '').split(' ')[1] || '';
             const colV = G === "Novo serviço" ? 1 : 0;
