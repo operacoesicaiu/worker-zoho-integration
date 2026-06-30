@@ -1,5 +1,11 @@
 # Zoho Integration Worker
 
+## Portfolio Case Study
+
+Full case study: https://pklavc.com/projects/zoho-integration-worker/
+
+This repository is part of my API integration portfolio. It demonstrates Zoho Creator API synchronization, OAuth-based access, Google Sheets delivery, scheduled worker execution, and business reporting automation.
+
 A Node.js worker service that synchronizes data from Zoho Creator applications to Google Sheets for business reporting and analysis.
 
 ## Overview
